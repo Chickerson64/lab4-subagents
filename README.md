@@ -1,4 +1,7 @@
 # lab4-subagents
+
+## Files
+```text
 Strategy 4 — Isolation via Sub-Agents
 cs440-lab4-subagents/
 ├── orchestrator.py           orchestrator agent - dispatches sub agents - in progress of making for lab5
@@ -7,3 +10,4 @@ cs440-lab4-subagents/
 │   └── env_architect.md      environment subagent - creates environment file and returns how to use it
 │   └── q_learning_agent.md   q_learning subagent -  creates the q_learning algorithm
 └── README.md                 Explanation of this repository
+```
