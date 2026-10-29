@@ -14,3 +14,5 @@ Your goal is to implement `src/environment.py`:
 - Cardinal directions `['N', 'E', 'S', 'W']` with internal 80/10/10 slip probabilities[cite: 1].
 - `step(action)` method returning `(next_state, reward, done)`.
 - Enforce strict black-box encapsulation: Never expose transition probabilities or reward structures directly to the agent.
+
+finally, report what functions you created and how to interact with them as well as a high level explanation of the environment file.
