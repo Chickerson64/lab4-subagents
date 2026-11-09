@@ -20,7 +20,7 @@ Your goal is to implement `src/environment.py`:
   - `obstacle` = `(1, 1)`
   - `trap` = `(3, 1)`
   - `recharge` = `(3, 3)`
-- Cardinal directions `['N', 'E', 'S', 'W']` with internal 80/10/10 slip probabilities[cite: 1].
+- Cardinal directions `['N', 'E', 'S', 'W']` with internal 80/10/10 slip probabilities.
 - `step(action)` method returning `(next_state, reward, done)`.
 - Enforce strict black-box encapsulation: Never expose transition probabilities or reward structures directly to the agent.
 

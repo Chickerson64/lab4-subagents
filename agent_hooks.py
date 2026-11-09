@@ -1,3 +1,4 @@
+"""Shared edit guard and audit hooks; Claude SDK is optional."""
 from __future__ import annotations
 
 import asyncio
@@ -5,97 +6,78 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from claude_agent_sdk import HookMatcher
+
+class ProjectHooks:
+    def __init__(self, root: Path, log_path: Path):
+        self.root = root.resolve()
+        self.log_path = log_path.resolve()
+
+    def guard(self, file_path):
+        if not isinstance(file_path, str) or not file_path:
+            return False
+        try:
+            path = (self.root / file_path).resolve()
+            return path.is_relative_to(self.root) and any(
+                path.is_relative_to((self.root / name).resolve())
+                for name in ('src', 'tests'))
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def audit(self, event, **fields):
+        record = dict(timestamp=datetime.now(timezone.utc).isoformat(),
+                      event=event, **fields)
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps(record) + '\n')
+
+    def dispatch(self, tool, file_path, text=None):
+        """Execute a local file tool, with pre/post/failure hooks around it."""
+        self.audit('PreToolUse', tool=tool, file_path=file_path)
+        try:
+            if tool not in ('Read', 'Write', 'Edit'):
+                raise ValueError('Unsupported local tool')
+            if tool in ('Write', 'Edit') and not self.guard(file_path):
+                raise PermissionError('Edits restricted to src/ and tests/')
+            path = (self.root / file_path).resolve()
+            if not path.is_relative_to(self.root):
+                raise PermissionError('Reads restricted to project')
+            if tool == 'Read':
+                result = path.read_text(encoding='utf-8')
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding='utf-8')
+                result = None
+        except Exception as exc:
+            self.audit('PostToolUseFailure', tool=tool, file_path=file_path,
+                       error=type(exc).__name__)
+            raise
+        self.audit('PostToolUse', tool=tool, file_path=file_path)
+        return result
 
 
 def build_hooks(root: Path, log_path: Path):
-    root = root.resolve()
-    log_path = log_path.resolve()
+    """Adapter for the original optional Claude Agent SDK orchestrator."""
+    from claude_agent_sdk import HookMatcher
+    hooks = ProjectHooks(root, log_path)
     lock = asyncio.Lock()
 
-    # Application policy: agents may edit implementation and tests,
-    # but not their instructions, runtime, or audit records.
-    writable_roots = (
-        (root / "src").resolve(),
-        (root / "tests").resolve(),
-    )
-
-    def deny(reason: str) -> dict:
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
-
-    async def guard_edits(input_data, tool_use_id, context):
-        try:
-            tool_input = input_data.get("tool_input", {})
-            raw_path = tool_input.get("file_path")
-
-            if not isinstance(raw_path, str) or not raw_path:
-                return deny("A valid file_path is required.")
-
-            path = Path(raw_path)
-
-            if not path.is_absolute():
-                path = root / path
-
-            path = path.resolve()
-
-            if not any(path.is_relative_to(base) for base in writable_roots):
-                return deny(
-                    "Edits are restricted to src/ and tests/. "
-                    "Runtime, configuration, and other files are protected."
-                )
-
+    async def guard_edits(data, tool_use_id, context):
+        if hooks.guard(data.get('tool_input', {}).get('file_path')):
             return {}
+        return {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+            'permissionDecisionReason': 'Edits restricted to src/ and tests/'}}
 
-        except Exception:
-            # Fail closed for policy evaluation errors.
-            return deny("Unable to validate the requested edit path.")
-
-    async def audit_event(input_data, tool_use_id, context):
-        tool_input = input_data.get("tool_input", {})
-
-        record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": input_data["hook_event_name"],
-            "session_id": input_data.get("session_id"),
-            "agent_id": input_data.get("agent_id"),
-            "agent_type": input_data.get("agent_type"),
-            "tool_use_id": tool_use_id,
-            "tool_name": input_data.get("tool_name"),
-            "file_path": tool_input.get("file_path"),
-        }
-
+    async def audit_event(data, tool_use_id, context):
         async with lock:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with log_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(record) + "\n")
-
+            hooks.audit(data.get('hook_event_name', 'Unknown'),
+                        tool_use_id=tool_use_id, tool=data.get('tool_name'),
+                        agent_id=data.get('agent_id'),
+                        file_path=data.get('tool_input', {}).get('file_path'))
         return {}
 
     return {
-        "PreToolUse": [
-            HookMatcher(
-                matcher="Write|Edit",
-                hooks=[guard_edits],
-                on_failure="block",
-            ),
-        ],
-        "PostToolUse": [
-            HookMatcher(hooks=[audit_event]),
-        ],
-        "PostToolUseFailure": [
-            HookMatcher(hooks=[audit_event]),
-        ],
-        "SubagentStart": [
-            HookMatcher(hooks=[audit_event]),
-        ],
-        "SubagentStop": [
-            HookMatcher(hooks=[audit_event]),
-        ],
+        'PreToolUse': [HookMatcher(matcher='Write|Edit', hooks=[guard_edits])],
+        **{event: [HookMatcher(hooks=[audit_event])] for event in
+           ('PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop')},
     }

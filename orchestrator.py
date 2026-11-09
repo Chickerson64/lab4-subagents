@@ -27,16 +27,29 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-from claude_agent_sdk import (
-    AgentDefinition,
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-    query,
-)
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+def load_claude_runtime():
+    # The optional coding runtime is independent of the stdlib learning program.
+    global AgentDefinition, AssistantMessage, ClaudeAgentOptions
+    global ResultMessage, TextBlock, ToolUseBlock, query
+    try:
+        from claude_agent_sdk import (
+            AgentDefinition, AssistantMessage, ClaudeAgentOptions,
+            ResultMessage, TextBlock, ToolUseBlock, query,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Optional Claude runtime unavailable. Use python3 -m src.train "
+            "for Lab 5 or python3 orchestrator.py --demo-hooks for local hooks. "
+            "No Claude API call was made."
+        ) from exc
+    if yaml is None:
+        raise RuntimeError("Optional Claude runtime also requires PyYAML.")
+
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -49,7 +62,7 @@ SUPPORTED_TOOLS = frozenset({
     "Grep",
     "Write",
     "Edit",
-    "skill",
+    "Skill",
 })
 
 PARENT_TOOLS = ["Agent", "Read", "Glob", "Grep","Skill"]
@@ -282,7 +295,10 @@ async def run(args: argparse.Namespace) -> None:
         flush=True,
     )
 
+    from agent_hooks import build_hooks
+
     options = ClaudeAgentOptions(
+        hooks=build_hooks(root, root / "artifacts" / "claude-hooks.jsonl"),
         cwd=str(root),
         system_prompt=ORCHESTRATOR_POLICY,
         agents=agents,
@@ -350,6 +366,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     goal = parser.add_mutually_exclusive_group(required=True)
+    goal.add_argument("--demo-hooks", action="store_true",
+                      help="Exercise local hooks without Claude or API calls.")
     goal.add_argument("--goal", help="Goal for the orchestrator.")
     goal.add_argument(
         "--goal-file",
@@ -382,7 +400,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     try:
-        asyncio.run(run(parse_args()))
+        args = parse_args()
+        if args.demo_hooks:
+            from feature_demo import main as demo
+            demo()
+        else:
+            load_claude_runtime()
+            asyncio.run(run(args))
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         return 130
