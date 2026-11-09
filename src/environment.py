@@ -11,7 +11,9 @@ class VacuumWorldEnv:
       [     0     ,    0    ,    0   ,    0    ]
       [     0     , -1(3,1) ,    0   , 10(3,3) ]
     """
-    def __init__(self, living_cost: float = -0.04):
+    def __init__(self, living_cost: float = -0.04, seed=None):
+        # Independent randomness makes runs reproducible without global side effects.
+        self._rng = random.Random(seed)
         self.rows = 4
         self.cols = 4
         self.living_cost = living_cost
@@ -31,7 +33,9 @@ class VacuumWorldEnv:
             'W': (0, -1)
         }
 
-    def reset(self) -> Tuple[int, int]:
+    def reset(self, seed=None) -> Tuple[int, int]:
+        if seed is not None:
+            self._rng.seed(seed)
         self.agent_pos = self.start_pos
         return self.agent_pos
 
@@ -40,7 +44,7 @@ class VacuumWorldEnv:
         left = self.actions[(idx - 1) % 4]
         right = self.actions[(idx + 1) % 4]
         
-        roll = random.random()
+        roll = self._rng.random()
         if roll < 0.8:
             return action
         elif roll < 0.9:
@@ -53,6 +57,12 @@ class VacuumWorldEnv:
         #Executes action with 80% intended, 10% left, 10% right slip.
         #Returns: (next_state, reward, done)
     
+        if action not in self.actions:
+            raise ValueError(f"Invalid action: {action!r}; expected one of {self.actions}")
+        # Once terminated, stay put and never award the terminal reward twice.
+        if self.agent_pos in (self.trap, self.recharge):
+            return self.agent_pos, 0.0, True
+
         actual_action = self._get_stochastic_action(action)
         dr, dc = self.delta[actual_action]
         target = (self.agent_pos[0] + dr, self.agent_pos[1] + dc)
